@@ -72,6 +72,8 @@ Container/runtime env passed by docker-run.sh:
 - PIPER_HTTP_URL default http://wyoming-piper:10200/api/tts
 - PIPER_MODEL default en_GB-cori-medium
 - PIPER_CORI_VOICE default en_GB-cori-medium
+- PIPER_SEMAINE_VOICE default en_GB-semaine-medium
+- PIPER_SOUTHERN_ENGLISH_FEMALE_VOICE default en_GB-southern_english_female-medium
 - PIPER_SPEAKER optional numeric speaker id
 - PIPER_HTTP_TIMEOUT_SECONDS default 120
 - QWEN_PLAY_Q_MAX default 100
@@ -102,7 +104,7 @@ export PIPER_MODEL=en_GB-cori-medium
 
 Body accepts:
 - text or prompt
-- optional speaker or voice
+- optional voice (model name or alias) and speaker (numeric id)
 
 Query flags:
 - play=0 or 1 default 1
@@ -120,20 +122,58 @@ Shim metadata endpoint.
 ### GET /languages
 Shim metadata endpoint.
 
+Friendly voice aliases:
+- cori and corie -> en_GB-cori-medium (override with PIPER_CORI_VOICE)
+- semaine -> en_GB-semaine-medium (override with PIPER_SEMAINE_VOICE)
+- southern_english_female -> en_GB-southern_english_female-medium (override with PIPER_SOUTHERN_ENGLISH_FEMALE_VOICE)
+
 ## Usage examples
 
 Health:
 
+```bash
 curl -s http://127.0.0.1:8092/health
+```
 
-Basic speak, JSON output:
+See available aliases from the API:
 
-curl -s -X POST 'http://127.0.0.1:8092/speak?play=0' \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"Hello from Quick Piper shim","speaker":"cori"}'
+```bash
+curl -s http://127.0.0.1:8092/speakers
+```
+
+Basic speak, JSON output (default voice/model):
+
+```bash
+curl -s -X POST 'http://127.0.0.1:8092/speak?play=0'   -H 'Content-Type: application/json'   -d '{"text":"Hello from Quick Piper shim"}'
+```
+
+Change voice using request body alias (`corie`):
+
+```bash
+curl -s -X POST 'http://127.0.0.1:8092/speak?play=0'   -H 'Content-Type: application/json'   -d '{"text":"Hello in Corie voice","voice":"corie"}'
+```
+
+Change voice using query param alias (`semaine`):
+
+```bash
+curl -s -X POST 'http://127.0.0.1:8092/speak?play=0&voice=semaine'   -H 'Content-Type: application/json'   -d '{"text":"Hello in Semaine voice"}'
+```
+
+Change voice using full Piper model name:
+
+```bash
+curl -s -X POST 'http://127.0.0.1:8092/speak?play=0'   -H 'Content-Type: application/json'   -d '{"text":"Hello with explicit model","voice":"en_GB-southern_english_female-medium"}'
+```
+
+Set numeric speaker id (multi-speaker models only):
+
+```bash
+curl -s -X POST 'http://127.0.0.1:8092/speak?play=0'   -H 'Content-Type: application/json'   -d '{"text":"Speaker test","voice":"corie","speaker":"0"}'
+```
 
 Expected JSON shape:
 
+```json
 {
   "ok": true,
   "queued": false,
@@ -141,29 +181,33 @@ Expected JSON shape:
   "bytes": 63020,
   "backend": "wyoming-piper"
 }
+```
 
-Return WAV audio bytes to file:
+Return WAV audio bytes to file (with voice override):
 
-curl -s -X POST 'http://127.0.0.1:8092/speak?play=0&return_audio=1' \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"Return raw wav audio","speaker":"cori"}' \
-  --output out.wav
+```bash
+curl -s -X POST 'http://127.0.0.1:8092/speak?play=0&return_audio=1'   -H 'Content-Type: application/json'   -d '{"text":"Return raw wav audio","voice":"southern_english_female"}'   --output out.wav
+```
 
 Inspect resulting audio:
 
+```bash
 file out.wav
+```
 
 Stream base64 WAV chunks as NDJSON:
 
-curl -N -X POST 'http://127.0.0.1:8092/speak?stream_audio_chunks=1&play=0' \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"Stream this in chunks","speaker":"cori"}'
+```bash
+curl -N -X POST 'http://127.0.0.1:8092/speak?stream_audio_chunks=1&play=0'   -H 'Content-Type: application/json'   -d '{"text":"Stream this in chunks","voice":"semaine"}'
+```
 
 Expected streamed lines:
 
+```json
 {"type":"audio_chunk","index":0,"audio_b64_wav":"UklGR..."}
 {"type":"audio_chunk","index":1,"audio_b64_wav":"UklGR..."}
 {"type":"done","chunks":2}
+```
 
 Notes on stream format:
 - media type is application/x-ndjson
