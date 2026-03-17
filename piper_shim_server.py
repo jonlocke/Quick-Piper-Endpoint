@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
@@ -22,12 +22,19 @@ from wyoming.tts import Synthesize, SynthesizeStopped, SynthesizeVoice
 
 PIPER_HTTP_URL = os.environ.get("PIPER_HTTP_URL", "http://wyoming-piper:10200/api/tts").strip()
 
+VOICE_ALIASES = {
+    "cori": os.environ.get("PIPER_CORI_VOICE", "en_GB-cori-medium").strip(),
+    "corie": os.environ.get("PIPER_CORI_VOICE", "en_GB-cori-medium").strip(),
+    "semaine": os.environ.get("PIPER_SEMAINE_VOICE", "en_GB-semaine-medium").strip(),
+    "southern_english_female": os.environ.get("PIPER_SOUTHERN_ENGLISH_FEMALE_VOICE", "en_GB-southern_english_female-medium").strip(),
+}
+
 def _resolve_voice_name(name: str) -> str:
     n = (name or "").strip()
     if not n:
         return "en_US-lessac-medium"
-    if n.lower() == "cori":
-        return os.environ.get("PIPER_CORI_VOICE", "en_GB-cori-medium").strip()
+    if n.lower() in VOICE_ALIASES:
+        return VOICE_ALIASES[n.lower()]
     return n
 
 PIPER_MODEL_RAW = os.environ.get("PIPER_MODEL", os.environ.get("PIPER_VOICE", "en_GB-cori-medium")).strip()
@@ -99,7 +106,33 @@ def _pcm_to_wav_bytes(pcm: bytes, rate: int, width: int, channels: int) -> bytes
     return buf.getvalue()
 
 
-async def _synth_one_async(text: str, requested_speaker: Optional[str] = None) -> bytes:
+def _merge_wav_chunks(chunks: list[bytes]) -> bytes:
+    if not chunks:
+        raise HTTPException(status_code=500, detail="no audio chunks to merge")
+    if len(chunks) == 1:
+        return chunks[0]
+
+    pcm_parts: list[bytes] = []
+    rate = width = channels = None
+    for chunk in chunks:
+        with wave.open(io.BytesIO(chunk), "rb") as wf:
+            chunk_rate = wf.getframerate()
+            chunk_width = wf.getsampwidth()
+            chunk_channels = wf.getnchannels()
+            if rate is None:
+                rate, width, channels = chunk_rate, chunk_width, chunk_channels
+            elif (chunk_rate, chunk_width, chunk_channels) != (rate, width, channels):
+                raise HTTPException(status_code=502, detail="incompatible audio chunks returned by Wyoming Piper")
+            pcm_parts.append(wf.readframes(wf.getnframes()))
+
+    return _pcm_to_wav_bytes(b"".join(pcm_parts), rate, width, channels)
+
+
+async def _synth_one_async(
+    text: str,
+    requested_speaker: Optional[str] = None,
+    requested_voice: Optional[str] = None,
+) -> bytes:
     timeout = max(1.0, PIPER_HTTP_TIMEOUT_SECONDS)
     client = AsyncTcpClient(WYOMING_HOST, WYOMING_PORT)
     await client.connect()
@@ -108,15 +141,13 @@ async def _synth_one_async(text: str, requested_speaker: Optional[str] = None) -
         voice_name = PIPER_MODEL
         voice_speaker = str(PIPER_SPEAKER) if PIPER_SPEAKER is not None else None
 
-        requested = (requested_speaker or "").strip()
-        if requested:
-            if requested.isdigit():
-                voice_speaker = requested
-            else:
-                resolved = _resolve_voice_name(requested)
-                if resolved.startswith("en_") and ("-" in resolved):
-                    # Accept explicit Piper model names and friendly aliases like "cori".
-                    voice_name = resolved
+        requested_voice_val = (requested_voice or "").strip()
+        if requested_voice_val:
+            voice_name = _resolve_voice_name(requested_voice_val)
+
+        requested_speaker_val = (requested_speaker or "").strip()
+        if requested_speaker_val and requested_speaker_val.isdigit():
+            voice_speaker = requested_speaker_val
 
         voice = SynthesizeVoice(name=voice_name)
         if voice_speaker is not None:
@@ -161,8 +192,18 @@ async def _synth_one_async(text: str, requested_speaker: Optional[str] = None) -
         await client.disconnect()
 
 
-def _synth_one(text: str, requested_speaker: Optional[str] = None) -> bytes:
-    return asyncio.run(_synth_one_async(text, requested_speaker=requested_speaker))
+def _synth_one(
+    text: str,
+    requested_speaker: Optional[str] = None,
+    requested_voice: Optional[str] = None,
+) -> bytes:
+    return asyncio.run(
+        _synth_one_async(
+            text,
+            requested_speaker=requested_speaker,
+            requested_voice=requested_voice,
+        )
+    )
 
 
 def _player_loop() -> None:
@@ -196,7 +237,12 @@ def health():
 
 @app.get("/speakers")
 def speakers():
-    return {"speakers": ["custom"], "default": "custom", "note": "shim forwards to Wyoming Piper; configure PIPER_SPEAKER env for numeric speaker id"}
+    return {
+        "speakers": ["custom"],
+        "default": "custom",
+        "voices": sorted(VOICE_ALIASES.keys()),
+        "note": "pass voice in HTTP request (body.voice/query voice) and optional numeric speaker id in body.speaker/query speaker",
+    }
 
 
 @app.get("/languages")
@@ -241,7 +287,8 @@ def speak(
     text_val = (body.text or body.prompt or text or prompt or "").strip()
     if not text_val:
         raise HTTPException(status_code=400, detail="text is required (body.text/body.prompt or query text/prompt)")
-    speaker_val = (body.speaker or body.voice or speaker or voice)
+    voice_val = (body.voice or voice)
+    speaker_val = (body.speaker or speaker)
 
     play = _parse_flag("play", play)
     return_audio = _parse_flag("return_audio", return_audio)
@@ -257,7 +304,7 @@ def speak(
             yielded = 0
             try:
                 for idx, part in enumerate(chunks):
-                    wav = _synth_one(part, requested_speaker=speaker_val)
+                    wav = _synth_one(part, requested_speaker=speaker_val, requested_voice=voice_val)
                     if play:
                         try:
                             play_q.put_nowait(wav)
@@ -279,9 +326,9 @@ def speak(
 
     rendered = []
     for part in chunks:
-        rendered.append(_synth_one(part, requested_speaker=speaker_val))
+        rendered.append(_synth_one(part, requested_speaker=speaker_val, requested_voice=voice_val))
 
-    wav_all = rendered[0] if len(rendered) == 1 else b"".join(rendered)
+    wav_all = _merge_wav_chunks(rendered)
 
     if play:
         try:

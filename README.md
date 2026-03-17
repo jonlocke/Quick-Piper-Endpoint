@@ -72,6 +72,8 @@ Container/runtime env passed by docker-run.sh:
 - PIPER_HTTP_URL default http://wyoming-piper:10200/api/tts
 - PIPER_MODEL default en_GB-cori-medium
 - PIPER_CORI_VOICE default en_GB-cori-medium
+- PIPER_SEMAINE_VOICE default en_GB-semaine-medium
+- PIPER_SOUTHERN_ENGLISH_FEMALE_VOICE default en_GB-southern_english_female-medium
 - PIPER_SPEAKER optional numeric speaker id
 - PIPER_HTTP_TIMEOUT_SECONDS default 120
 - QWEN_PLAY_Q_MAX default 100
@@ -102,7 +104,7 @@ export PIPER_MODEL=en_GB-cori-medium
 
 Body accepts:
 - text or prompt
-- optional speaker or voice
+- optional voice (model name or alias) and speaker (numeric id)
 
 Query flags:
 - play=0 or 1 default 1
@@ -120,6 +122,11 @@ Shim metadata endpoint.
 ### GET /languages
 Shim metadata endpoint.
 
+Friendly voice aliases:
+- cori and corie -> en_GB-cori-medium (override with PIPER_CORI_VOICE)
+- semaine -> en_GB-semaine-medium (override with PIPER_SEMAINE_VOICE)
+- southern_english_female -> en_GB-southern_english_female-medium (override with PIPER_SOUTHERN_ENGLISH_FEMALE_VOICE)
+
 ## Usage examples
 
 Health:
@@ -130,7 +137,7 @@ Basic speak, JSON output:
 
 curl -s -X POST 'http://127.0.0.1:8092/speak?play=0' \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Hello from Quick Piper shim","speaker":"cori"}'
+  -d '{"text":"Hello from Quick Piper shim","voice":"corie"}'
 
 Expected JSON shape:
 
@@ -146,7 +153,7 @@ Return WAV audio bytes to file:
 
 curl -s -X POST 'http://127.0.0.1:8092/speak?play=0&return_audio=1' \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Return raw wav audio","speaker":"cori"}' \
+  -d '{"text":"Return raw wav audio","voice":"southern_english_female"}' \
   --output out.wav
 
 Inspect resulting audio:
@@ -157,7 +164,7 @@ Stream base64 WAV chunks as NDJSON:
 
 curl -N -X POST 'http://127.0.0.1:8092/speak?stream_audio_chunks=1&play=0' \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Stream this in chunks","speaker":"cori"}'
+  -d '{"text":"Stream this in chunks","voice":"semaine"}'
 
 Expected streamed lines:
 
