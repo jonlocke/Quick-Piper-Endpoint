@@ -49,7 +49,11 @@ if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
   if [[ "$container_pid" =~ ^[0-9]+$ ]] && (( container_pid > 0 )); then
     echo "Killing existing container PID: $container_pid"
     kill -9 "$container_pid" 2>/dev/null || true
+    sleep 5
   fi
+
+  echo "Stopping existing container: $CONTAINER_NAME"
+  docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
   echo "Removing existing container: $CONTAINER_NAME"
   docker rm -f "$CONTAINER_NAME" >/dev/null
