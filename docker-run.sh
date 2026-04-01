@@ -45,6 +45,12 @@ if [[ -n "${PIPER_VOICE:-}" && "${PIPER_MODEL}" == "en_GB-cori-medium" ]]; then
 fi
 
 if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
+  container_pid="$(docker inspect -f '{{.State.Pid}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+  if [[ "$container_pid" =~ ^[0-9]+$ ]] && (( container_pid > 0 )); then
+    echo "Killing existing container PID: $container_pid"
+    kill -9 "$container_pid" 2>/dev/null || true
+  fi
+
   echo "Removing existing container: $CONTAINER_NAME"
   docker rm -f "$CONTAINER_NAME" >/dev/null
 fi
